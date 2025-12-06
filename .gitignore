@@ -1,0 +1,14 @@
+# Build outputs
+target/
+
+# Environment files
+.env
+
+# IDE
+.vscode/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
