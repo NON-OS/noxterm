@@ -1,0 +1,31 @@
+[package]
+name = "noxterm"
+version = "0.1.0"
+edition = "2021"
+description = "NØXTERM Backend - Privacy-preserving containerized terminal"
+license = "BSD-3-Clause"
+authors = ["NOXTERM Team"]
+keywords = ["terminal", "docker", "privacy", "containers"]
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bollard = "0.16"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+futures-util = "0.3"
+dotenvy = "0.15"
+reqwest = { version = "0.11", features = ["socks", "json"] }
+tokio-process = "0.2"
+
+[[bin]]
+name = "noxterm-terminal"
+path = "src/main.rs"
