@@ -1,31 +1,50 @@
 [package]
 name = "noxterm"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-description = "NØXTERM Backend - Privacy-preserving containerized terminal"
+description = "NOXTERM - Containerized terminal solution"
 license = "BSD-3-Clause"
-authors = ["NOXTERM Team"]
+authors = ["NOXTERM Team <team@nonos.systems>"]
 keywords = ["terminal", "docker", "privacy", "containers"]
+homepage = "https://nonos.systems"
+repository = "https://github.com/NON-OS/noxterm"
+readme = "../README.md"
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-tokio = { version = "1.35", features = ["full"] }
-axum = { version = "0.7", features = ["ws"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors"] }
+tokio = { version = "1.40", features = ["full"] }
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = { version = "0.4", features = ["timeout"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bollard = "0.16"
-uuid = { version = "1.6", features = ["v4", "serde"] }
+bollard = { version = "0.17", features = ["ssl"] }
+uuid = { version = "1.10", features = ["v4", "serde", "fast-rng"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
 futures = "0.3"
 futures-util = "0.3"
 dotenvy = "0.15"
-reqwest = { version = "0.11", features = ["socks", "json"] }
-tokio-process = "0.2"
+reqwest = { version = "0.11", features = ["socks", "json", "rustls-tls"], default-features = false }
+regex = "1.10"
+
+[build-dependencies]
+chrono = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+strip = false
 
 [[bin]]
-name = "noxterm-terminal"
+name = "noxterm-backend"
 path = "src/main.rs"
