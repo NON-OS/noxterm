@@ -17,17 +17,18 @@ NOXTERM aims to become the leading secure, anonymous and containerized terminal 
 - **User Interface**: Modern web-based terminal with XTerm.js
 - **Multiple Container Types**: Ubuntu, & to unlock; Alpine, Debian, Node.js, Python, Rust
 
-### 🚧 In Development
-- **Terminal Input System**: Fixing keyboard input and PTY mode
-- **Session Management**: Persistent container sessions
-- **Privacy Controls**: Toggle anonymous networking
+**Phase 1: COMPLETED 10.12.2025 ✔️ smoked 🐸** 
+
+**Phase 3: COMPLETED 10.12.2025 ✔️ smoked 🐸** 
 
 ---
 
 ## 🛣️ Development Phases
 
-## Phase 1: Core Terminal Functionality ⭐⭐⭐
+## Phase 1: Core Terminal Functionality 
 **Timeline: Week 1 | Priority: Critical**
+
+**Phase 1: COMPLETED 10.12.2025 ✔️ smoked 🐸** 
 
 ### Objectives
 - Achieve 100% reliable keyboard input in terminal
@@ -35,17 +36,18 @@ NOXTERM aims to become the leading secure, anonymous and containerized terminal 
 - Support all basic Unix commands and interactive editors
 
 ### Deliverables
-- [ ] **WebSocket Message Handling** - Debug and fix input transmission
-- [ ] **PTY Mode Implementation** - Complete terminal session management
-- [ ] **Command Execution** - `whoami`, `ls`, `pwd`, `mkdir`, `cd` working perfectly
-- [ ] **Interactive Editors** - Full `nano` and `vim` support with save/exit
-- [ ] **Package Management** - `apt update`, `apt install`, `yum`, `apk` commands
+- [✔️] **WebSocket Message Handling** - Debug and fix input transmission
+- [✔️] **PTY Mode Implementation** - Complete terminal session management
+- [✔️] **Command Execution** - `whoami`, `ls`, `pwd`, `mkdir`, `cd` working perfectly
+- [✔️] **Interactive Editors** - Full `nano` and `vim` support with save/exit
+- [✔️] **Package Management** - `apt update`, `apt install`, `yum`, `apk` commands
 
 ### Success Criteria
 - Zero input lag or dropped keystrokes
 - All standard terminal applications work correctly
 - Interactive sessions maintain state properly
 
+PHASE 1 COMPLETED 10.12.2025 ✔️ smoked 🐸
 ---
 
 ## Phase 2: Container Lifecycle Management ⭐⭐
@@ -73,22 +75,26 @@ NOXTERM aims to become the leading secure, anonymous and containerized terminal 
 ## Phase 3: Anyone Protocol Integration ⭐⭐⭐
 **Timeline: Week 2-3 | Priority: Critical**
 
+**Phase 3: COMPLETED 10.12.2025 ✔️ smoked 🐸** 
+
 ### Objectives
 - Seamless anonymous networking for all container traffic
 - User-friendly privacy controls
 - Circuit management and monitoring
 
 ### Deliverables
-- [ ] **SOCKS5 Proxy Integration** - Route all container traffic through Anyone
-- [ ] **Privacy Toggle UI** - One-click privacy activation/deactivation
-- [ ] **Circuit Management** - Automatic circuit refresh and failover
-- [ ] **Connection Monitoring** - Real-time privacy status indicators
-- [ ] **Anonymous DNS** - Prevent DNS leaks
+- [✔️] **SOCKS5 Proxy Integration** - Route all container traffic through Anyone
+- [✔️] **Privacy Toggle UI** - One-click privacy activation/deactivation
+- [✔️] **Circuit Management** - Automatic circuit refresh and failover
+- [✔️] **Connection Monitoring** - Real-time privacy status indicators (CAN BE DONE THROUGH DEBUG LOGS, or PTY Terminal. 
+- [ ] **Anonymous DNS** - Prevent DNS leaks, to be added.
 
 ### Success Criteria
 - 100% of container traffic routed through Anyone when enabled
 - Sub-3-second privacy mode activation
 - Zero IP/DNS leaks detected in testing
+
+Phase 3: COMPLETED 10.12.2025 ✔️ smoked 🐸
 
 ---
 
@@ -103,7 +109,7 @@ NOXTERM aims to become the leading secure, anonymous and containerized terminal 
 - [ ] **File Transfer** - Upload/download files to/from containers
 - [ ] **Terminal Themes** - Multiple color schemes and customization
 - [ ] **Command History** - Persistent history across sessions
-- [ ] **Copy/Paste Support** - Seamless clipboard integration
+- [✔️] **Copy/Paste Support** - Seamless clipboard integration
 - [ ] **Dynamic Resizing** - Responsive terminal window sizing
 
 ### Success Criteria
@@ -250,5 +256,5 @@ This roadmap is a living document that evolves with community feedback and techn
 
 https://t.me/+lF9W66gUK1U0YzI0
 
-*Last Updated: December 2025*  
+*Last Updated: 10. December 2025*  
 *Version: 1.0*
