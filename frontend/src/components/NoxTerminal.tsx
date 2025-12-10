@@ -20,7 +20,7 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
   const fitAddon = useRef<FitAddon | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
-  const [usePtyMode, setUsePtyMode] = useState(false);
+  const [usePtyMode, setUsePtyMode] = useState(true); // PTY mode by default for full editor support
 
   useEffect(() => {
     if (!terminalRef.current || terminal.current) return;
@@ -28,19 +28,29 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
     
     terminal.current = new Terminal({
       cursorBlink: true,
+      cursorStyle: 'block',
       theme: {
         background: '#000000',
         foreground: '#ffffff',
         cursor: '#ffffff',
+        cursorAccent: '#000000',
+        selectionBackground: 'rgba(255, 255, 255, 0.3)',
       },
       fontSize: 14,
-      fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+      fontFamily: 'Monaco, Menlo, "Ubuntu Mono", "Consolas", monospace',
       convertEol: false,
       scrollback: 10000,
       allowTransparency: false,
       disableStdin: false,
       cols: 80,
       rows: 24,
+      // PTY mode settings - critical for editor support
+      windowsMode: false,
+      macOptionIsMeta: true, // Use Option as Meta key on macOS
+      macOptionClickForcesSelection: true,
+      rightClickSelectsWord: true,
+      // Allow all terminal escape sequences through
+      allowProposedApi: true,
     });
 
     fitAddon.current = new FitAddon();
@@ -118,6 +128,11 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
     
     socket.current = new WebSocket(wsUrl);
 
+    // Set binary type for PTY mode - required for proper binary data handling
+    if (usePtyMode) {
+      socket.current.binaryType = 'arraybuffer';
+    }
+
     socket.current.onopen = () => {
       setStatus('connected');
       terminal.current?.writeln('✅ Connected to NOXTERM backend');
@@ -128,26 +143,35 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
       }
     };
 
-    socket.current.onmessage = (event) => {
+    socket.current.onmessage = async (event) => {
       if (usePtyMode) {
         // PTY mode - handle raw terminal output
         if (event.data instanceof ArrayBuffer) {
+          // Binary data from backend - write directly to terminal
           const uint8Array = new Uint8Array(event.data);
           terminal.current?.write(uint8Array);
+        } else if (event.data instanceof Blob) {
+          // Handle Blob data (fallback for some browsers)
+          const arrayBuffer = await event.data.arrayBuffer();
+          const uint8Array = new Uint8Array(arrayBuffer);
+          terminal.current?.write(uint8Array);
         } else if (typeof event.data === 'string') {
-          try {
-            // Try to parse as JSON first (for control messages)
-            const message = JSON.parse(event.data);
-            if (message.type === 'pty_output') {
-              terminal.current?.write(message.data);
-            } else if (message.type === 'exit_interactive') {
-              // Signal that we're back to shell
-              (window as any).setInteractiveMode?.(false);
+          // Text data - could be JSON control message or raw terminal output
+          if (event.data.startsWith('{')) {
+            try {
+              const message = JSON.parse(event.data);
+              if (message.type === 'pty_output') {
+                terminal.current?.write(message.data);
+              } else if (message.type === 'exit_interactive') {
+                (window as any).setInteractiveMode?.(false);
+              }
+              return;
+            } catch {
+              // Not JSON, write as raw output
             }
-          } catch {
-            // Raw terminal output
-            terminal.current?.write(event.data);
           }
+          // Raw terminal output string
+          terminal.current?.write(event.data);
         }
       } else {
         // Command mode - handle structured messages
@@ -209,16 +233,35 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
   const setupPtyInput = () => {
     if (!terminal.current) return;
 
+    // Send raw terminal data as text - xterm gives us strings with escape sequences
+    // The backend handles this correctly as UTF-8
     terminal.current.onData((data) => {
       if (!socket.current || socket.current.readyState !== WebSocket.OPEN) return;
-      
-      const bytes = new TextEncoder().encode(data);
-      socket.current.send(bytes);
+
+      // Send as text - the string contains all escape sequences (Ctrl+X = \x18, etc.)
+      // Using text preserves UTF-8 encoding and control characters
+      socket.current.send(data);
     });
 
-    terminal.current.onResize(() => {
-      // Handle terminal resize if needed
+    // Handle terminal resize - send resize command to backend
+    terminal.current.onResize(({ cols, rows }) => {
+      if (!socket.current || socket.current.readyState !== WebSocket.OPEN) return;
+
+      // Send resize command as JSON text
+      const resizeMsg = JSON.stringify({ resize: [cols, rows] });
+      socket.current.send(resizeMsg);
     });
+
+    // Trigger initial resize after connection
+    setTimeout(() => {
+      if (terminal.current && socket.current?.readyState === WebSocket.OPEN) {
+        const dims = fitAddon.current?.proposeDimensions();
+        if (dims) {
+          const resizeMsg = JSON.stringify({ resize: [dims.cols, dims.rows] });
+          socket.current.send(resizeMsg);
+        }
+      }
+    }, 500);
   };
 
   const setupTerminalInput = () => {

@@ -47,4 +47,4 @@ strip = false
 
 [[bin]]
 name = "noxterm-backend"
-path = "src/main.rs"
+path = "src/noxterm.rs"
