@@ -121,10 +121,14 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
     // Connecting to backend
     setStatus('connecting');
     terminal.current?.writeln('🔌 Connecting to PTY backend...');
-
-    const wsUrl = usePtyMode ? 
-      `ws://localhost:3001/pty/${sessionId}` : 
-      `ws://localhost:3001/ws/${sessionId}`;
+    
+    // Fixed to use current host for WebSocket connection **Community Feedback Robert**
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '3001');
+    const wsUrl = usePtyMode ?
+      `${protocol}//${host}:${port}/pty/${sessionId}` :
+      `${protocol}//${host}:${port}/ws/${sessionId}`;
     
     socket.current = new WebSocket(wsUrl);
 
