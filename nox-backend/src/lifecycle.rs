@@ -440,13 +440,14 @@ impl LifecycleManager {
         }
     }
 
-    /// List all noxterm containers
+    /// List all noxterm session containers (not infrastructure like postgres)
     async fn list_noxterm_containers(&self) -> Result<Vec<String>, anyhow::Error> {
         use bollard::container::ListContainersOptions;
         use std::collections::HashMap;
 
         let mut filters = HashMap::new();
-        filters.insert("name", vec!["noxterm-"]);
+        // Only target session containers (noxterm-session-*), not infrastructure (noxterm-postgres)
+        filters.insert("name", vec!["noxterm-session-"]);
 
         let containers = self
             .docker
@@ -487,11 +488,6 @@ impl LifecycleManager {
     /// Get all cached health statuses
     pub async fn get_all_health(&self) -> Vec<ContainerHealth> {
         self.health_cache.read().await.values().cloned().collect()
-    }
-
-    /// Update health cache directly (called from websocket handlers)
-    pub async fn update_health(&self, session_id: Uuid, health: ContainerHealth) {
-        self.health_cache.write().await.insert(session_id, health);
     }
 
     /// Remove session from health cache
