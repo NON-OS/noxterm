@@ -76,31 +76,24 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
       window.removeEventListener('resize', handleResize);
     };
 
-    // Welcome message
+    // Welcome message - clean, professional NON-OS branding
     terminal.current.clear();
-    terminal.current.writeln('🚀 NØXTERM - Privacy-First Containerized Terminal');
-    terminal.current.writeln('================================================');
-    terminal.current.writeln('🌟 Open Source Project by NØNOS Team');
-    terminal.current.writeln('🌐 Website: https://nonos.systems');
-    terminal.current.writeln('📦 GitHub: https://github.com/NON-OS/noxterm');
-    terminal.current.writeln('📧 Contact: team@nonos.systems');
-    terminal.current.writeln('🛡️  Security: security@nonos.systems');
+    terminal.current.writeln('\x1b[36m┌─────────────────────────────────────────────────────────────┐\x1b[0m');
+    terminal.current.writeln('\x1b[36m│\x1b[0m  \x1b[1;37mNØXTERM\x1b[0m \x1b[36m- Privacy-First Terminal\x1b[0m                           \x1b[36m│\x1b[0m');
+    terminal.current.writeln('\x1b[36m│\x1b[0m  \x1b[90mBy NON-OS Systems\x1b[0m                                           \x1b[36m│\x1b[0m');
+    terminal.current.writeln('\x1b[36m└─────────────────────────────────────────────────────────────┘\x1b[0m');
     terminal.current.writeln('');
-    terminal.current.writeln('🔒 Security Hardened:');
-    terminal.current.writeln('   • Containerized isolation • Privacy-first design');
-    terminal.current.writeln('   • Zero data retention • Encrypted communications');
-    terminal.current.writeln('   • See SECURITY.md for full security documentation');
+    terminal.current.writeln('\x1b[90m  nonos.systems | github.com/NON-OS/noxterm\x1b[0m');
     terminal.current.writeln('');
-    terminal.current.writeln('💎 Support Development:');
-    terminal.current.writeln('   ETH/ERC-20: 0x23EEF7121705C90cfa01474736D0645c1eEB21ac');
-    terminal.current.writeln('   XMR: 427RJHzQCGXUogwDcqbQNaYY5aUQ8e9B712FAvdQSt4c9PuUbX9kS9wZXz4AmT95fzMbdRfZuE3Wm43ekCRM1GYZ9Mdib2z');
+    terminal.current.writeln('\x1b[36m  Container:\x1b[0m ' + containerImage);
+    terminal.current.writeln('\x1b[36m  User:\x1b[0m      ' + userId);
+    terminal.current.writeln('\x1b[36m  Session:\x1b[0m   ' + sessionId.slice(0, 8) + '...');
     terminal.current.writeln('');
-    terminal.current.writeln('================================================');
-    terminal.current.writeln(`🐳 Container: ${containerImage}`);
-    terminal.current.writeln(`👤 User: ${userId}`);
-    terminal.current.writeln(`🔑 Session: ${sessionId.slice(0, 8)}...`);
+    terminal.current.writeln('\x1b[90m  Containerized isolation | Zero data retention | Encrypted\x1b[0m');
     terminal.current.writeln('');
-    terminal.current.writeln('✨ Privacy-enhanced terminal ready! Type commands below.');
+    terminal.current.writeln('\x1b[90m  Support Development:\x1b[0m');
+    terminal.current.writeln('\x1b[90m  ETH:\x1b[0m \x1b[36m0x23EEF7121705C90cfa01474736D0645c1eEB21ac\x1b[0m');
+    terminal.current.writeln('\x1b[90m  XMR:\x1b[0m \x1b[36m427RJHzQCGXUogwDcqbQNaYY5aUQ8e9B712FAvdQSt4c9PuUbX9kS9wZXz4AmT95fzMbdRfZuE3Wm43ekCRM1GYZ9Mdib2z\x1b[0m');
     terminal.current.writeln('');
     
     // Connect immediately
@@ -120,7 +113,7 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
   const connectToBackend = () => {
     // Connecting to backend
     setStatus('connecting');
-    terminal.current?.writeln('🔌 Connecting to PTY backend...');
+    terminal.current?.writeln('\x1b[36m  Establishing connection...\x1b[0m');
     
     // Fixed to use current host for WebSocket connection **Community Feedback Robert**
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -139,7 +132,8 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
 
     socket.current.onopen = () => {
       setStatus('connected');
-      terminal.current?.writeln('✅ Connected to NOXTERM backend');
+      terminal.current?.writeln('\x1b[32m  Connected\x1b[0m');
+      terminal.current?.writeln('');
       if (usePtyMode) {
         setupPtyInput();
       } else {
@@ -191,24 +185,24 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
 
     socket.current.onclose = () => {
       setStatus('disconnected');
-      terminal.current?.writeln('\r\n❌ Connection lost');
+      terminal.current?.writeln('\r\n\x1b[31mConnection lost\x1b[0m');
     };
 
     socket.current.onerror = () => {
       setStatus('error');
-      terminal.current?.writeln('\r\n❌ Connection error');
+      terminal.current?.writeln('\r\n\x1b[31mConnection error\x1b[0m');
     };
   };
 
   const handleBackendMessage = (message: any) => {
     switch (message.type) {
       case 'container_ready':
-        terminal.current?.writeln('📦 Container is ready!');
+        terminal.current?.writeln('\x1b[32mContainer ready\x1b[0m');
         terminal.current?.write('\r\n$ ');
         break;
-        
+
       case 'ready':
-        terminal.current?.writeln('✅ System ready! Type commands below.');
+        terminal.current?.writeln('\x1b[32mReady\x1b[0m');
         terminal.current?.write('\r\n$ ');
         break;
 
@@ -221,12 +215,12 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
         break;
 
       case 'command_error':
-        terminal.current?.writeln(`\r\n❌ Error: ${message.error}`);
+        terminal.current?.writeln(`\r\n\x1b[31mError: ${message.error}\x1b[0m`);
         terminal.current?.write('\r\n$ ');
         break;
 
       case 'error':
-        terminal.current?.writeln(`\r\n🚨 System error: ${message.message}`);
+        terminal.current?.writeln(`\r\n\x1b[31mSystem error: ${message.message}\x1b[0m`);
         break;
 
       default:
@@ -326,7 +320,7 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
 
   const executeCommand = (command: string) => {
     if (!socket.current || socket.current.readyState !== WebSocket.OPEN) {
-      terminal.current?.writeln('❌ Not connected to backend');
+      terminal.current?.writeln('\x1b[31mNot connected\x1b[0m');
       terminal.current?.write('$ ');
       return;
     }
@@ -352,61 +346,58 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
 
   const getStatusColor = () => {
     switch (status) {
-      case 'connected': return 'text-green-400';
-      case 'connecting': return 'text-yellow-400';
-      case 'error': return 'text-red-400';
-      case 'disconnected': return 'text-gray-400';
+      case 'connected': return 'text-[#66FFFF]';
+      case 'connecting': return 'text-[#FFB366]';
+      case 'error': return 'text-[#FF6666]';
+      case 'disconnected': return 'text-gray-500';
     }
   };
 
   return (
     <div className="flex flex-col h-screen w-screen bg-black overflow-hidden">
       {/* Status bar */}
-      <div className="bg-gray-900 px-4 py-2 flex justify-between items-center text-sm border-b border-gray-700 flex-shrink-0">
+      <div className="bg-[#0a0a0a] px-4 py-2 flex justify-between items-center text-sm border-b border-[rgba(102,255,255,0.1)] flex-shrink-0">
         <div className={`flex items-center space-x-2 ${getStatusColor()}`}>
-          <span>●</span>
+          <span className="w-2 h-2 rounded-full bg-current"></span>
           <span className="capitalize font-mono">{status}</span>
-          <span className="text-gray-400">| NOXTERM v1.0 Open Source</span>
-          <button 
+          <span className="text-gray-600">|</span>
+          <span className="text-gray-500 font-mono">NØXTERM</span>
+          <button
             onClick={togglePtyMode}
             className={`ml-2 px-3 py-1 text-xs font-mono rounded border transition-all ${
-              usePtyMode 
-                ? 'bg-green-600 text-white border-green-500 shadow-lg shadow-green-500/20' 
-                : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600'
+              usePtyMode
+                ? 'bg-[#2E5C5C] text-[#66FFFF] border-[#66FFFF]/30'
+                : 'bg-[#111] text-gray-400 border-gray-700 hover:border-gray-600'
             }`}
             title={usePtyMode ? 'PTY Mode: Full terminal emulation' : 'CMD Mode: Command-based interaction'}
           >
-            {usePtyMode ? '🔧 PTY' : '💻 CMD'}
+            {usePtyMode ? 'PTY' : 'CMD'}
           </button>
         </div>
         <div className="flex items-center space-x-4">
           {/* Project Links */}
-          <div className="flex items-center space-x-2 text-xs">
-            <a href="https://nonos.systems" target="_blank" rel="noopener noreferrer" 
-               className="text-blue-400 hover:text-blue-300 font-mono flex items-center space-x-1">
-              <span>🌐</span><span>nonos.systems</span>
+          <div className="flex items-center space-x-3 text-xs">
+            <a href="https://nonos.systems" target="_blank" rel="noopener noreferrer"
+               className="text-[#66FFFF] hover:text-white font-mono transition-colors">
+              nonos.systems
             </a>
-            <a href="https://github.com/NON-OS/noxterm" target="_blank" rel="noopener noreferrer" 
-               className="text-green-400 hover:text-green-300 font-mono flex items-center space-x-1">
+            <a href="https://github.com/NON-OS/noxterm" target="_blank" rel="noopener noreferrer"
+               className="text-gray-500 hover:text-[#66FFFF] font-mono flex items-center space-x-1 transition-colors">
                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                  <path fillRule="evenodd" d="M10 0C4.477 0 0 4.484 0 10.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0110 4.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.942.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0020 10.017C20 4.484 15.522 0 10 0z"/>
                </svg>
                <span>GitHub</span>
             </a>
-            <a href="mailto:team@nonos.systems" 
-               className="text-yellow-400 hover:text-yellow-300 font-mono flex items-center space-x-1">
-              <span>📧</span><span>Contact</span>
-            </a>
           </div>
           {status !== 'connected' && (
-            <button 
+            <button
               onClick={reconnect}
-              className="px-3 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 font-mono"
+              className="px-3 py-1 bg-[#2E5C5C] text-[#66FFFF] rounded text-xs hover:bg-[#3a7575] font-mono transition-colors"
             >
               RECONNECT
             </button>
           )}
-          <span className="text-gray-500 font-mono">ID: {sessionId.slice(0, 8)}</span>
+          <span className="text-gray-600 font-mono">{sessionId.slice(0, 8)}</span>
         </div>
       </div>
       
@@ -418,21 +409,21 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
         />
       </div>
 
-      {/* Professional Footer with Donations */}
-      <div className="bg-gray-900 px-4 py-2 border-t border-gray-700 flex-shrink-0">
+      {/* Footer */}
+      <div className="bg-[#0a0a0a] px-4 py-2 border-t border-[rgba(102,255,255,0.1)] flex-shrink-0">
         <div className="flex justify-between items-center text-xs">
-          <div className="flex items-center space-x-4 text-gray-400">
-            <span className="font-mono">🚀 NOXTERM - Secure Containerized Terminal</span>
-            <span>•</span>
-            <span>Enterprise-Ready Terminal Solution</span>
+          <div className="flex items-center space-x-4 text-gray-600">
+            <span className="font-mono">NØXTERM</span>
+            <span className="text-gray-700">|</span>
+            <span>Privacy-First Terminal</span>
           </div>
-          
-          {/* Donation Section */}
+
+          {/* Support Section */}
           <div className="flex items-center space-x-4">
-            <span className="text-gray-500 font-mono">Support Development:</span>
+            <span className="text-gray-700 font-mono">Support:</span>
             <div className="flex items-center space-x-3">
               <div className="group relative">
-                <button className="text-purple-400 hover:text-purple-300 font-mono text-xs px-2 py-1 border border-purple-600 rounded flex items-center space-x-1">
+                <button className="text-[#66FFFF]/60 hover:text-[#66FFFF] font-mono text-xs px-2 py-1 border border-[rgba(102,255,255,0.2)] rounded flex items-center space-x-1 transition-colors">
                   <svg className="w-3 h-3" viewBox="0 0 256 417" fill="currentColor">
                     <path d="M127.961 0l-2.795 9.5v275.668l2.795 2.79 127.962-75.638z"/>
                     <path d="M127.962 0L0 212.32l127.962 75.639V154.158z" opacity="0.6"/>
@@ -443,27 +434,27 @@ export const NoxTerminal: React.FC<NoxTerminalProps> = ({
                   </svg>
                   <span>ETH</span>
                 </button>
-                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-gray-800 text-white text-xs p-2 rounded shadow-lg border border-gray-600 w-80">
-                  <div className="font-mono break-all">
+                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-[#0d0d0d] text-white text-xs p-3 rounded-lg shadow-lg border border-[rgba(102,255,255,0.2)] w-80">
+                  <div className="font-mono break-all text-[#66FFFF]">
                     0x23EEF7121705C90cfa01474736D0645c1eEB21ac
                   </div>
-                  <div className="text-gray-400 mt-1">ERC-20 Donation Address</div>
+                  <div className="text-gray-500 mt-2">ERC-20 Donation Address</div>
                 </div>
               </div>
-              
+
               <div className="group relative">
-                <button className="text-orange-400 hover:text-orange-300 font-mono text-xs px-2 py-1 border border-orange-600 rounded flex items-center space-x-1">
+                <button className="text-[#66FFFF]/60 hover:text-[#66FFFF] font-mono text-xs px-2 py-1 border border-[rgba(102,255,255,0.2)] rounded flex items-center space-x-1 transition-colors">
                   <svg className="w-3 h-3" viewBox="0 0 256 256" fill="currentColor">
                     <path d="M128 0C57.3 0 0 57.3 0 128s57.3 128 128 128 128-57.3 128-128S198.7 0 128 0zm0 240c-61.9 0-112-50.1-112-112S66.1 16 128 16s112 50.1 112 112-50.1 112-112 112z"/>
                     <circle cx="128" cy="128" r="64"/>
                   </svg>
                   <span>XMR</span>
                 </button>
-                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-gray-800 text-white text-xs p-2 rounded shadow-lg border border-gray-600 w-96">
-                  <div className="font-mono break-all text-xs">
+                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-[#0d0d0d] text-white text-xs p-3 rounded-lg shadow-lg border border-[rgba(102,255,255,0.2)] w-96">
+                  <div className="font-mono break-all text-[#66FFFF] text-xs">
                     427RJHzQCGXUogwDcqbQNaYY5aUQ8e9B712FAvdQSt4c9PuUbX9kS9wZXz4AmT95fzMbdRfZuE3Wm43ekCRM1GYZ9Mdib2z
                   </div>
-                  <div className="text-gray-400 mt-1">Monero Donation Address</div>
+                  <div className="text-gray-500 mt-2">Monero Donation Address</div>
                 </div>
               </div>
             </div>
