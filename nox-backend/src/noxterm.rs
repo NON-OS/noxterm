@@ -2,9 +2,8 @@ use anyhow::Result;
 use axum::{
     extract::{ConnectInfo, State, WebSocketUpgrade, Path, Query},
     http::{HeaderMap, StatusCode},
-    middleware,
     response::{Html, IntoResponse},
-    routing::{get, post, delete},
+    routing::{get, post},
     Json, Router,
 };
 use tokio::io::AsyncWriteExt;
@@ -29,7 +28,10 @@ mod security;
 use anyone_service::AnyoneService;
 use db::DbPool;
 use lifecycle::{LifecycleConfig, LifecycleManager};
-use security::{validate_input, validate_websocket_message, validate_user_id, validate_image_name, extract_client_ip};
+use security::{
+    validate_user_id, validate_image_name, extract_client_ip,
+    validate_input, sanitize_container_name, Severity as SecuritySeverity,
+};
 
 // Re-import sqlx for query execution in handlers
 use sqlx;
@@ -550,6 +552,49 @@ async fn create_session(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    // Extract client IP for rate limiting and audit
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
+    let client_ip = extract_client_ip(xff, real_ip, Some(&addr.to_string()));
+    let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(String::from);
+
+    // Rate limiting check
+    if let Some(ref pool) = state.db_pool {
+        let rate_limit_key = client_ip.clone().unwrap_or_else(|| payload.user_id.clone());
+        match db::rate_limits::check_and_increment(pool, &rate_limit_key, "session_create", 10, 60).await {
+            Ok(false) => {
+                warn!("Rate limit exceeded for session creation: {}", rate_limit_key);
+
+                // Log rate limit event
+                let _ = db::audit::log(
+                    pool,
+                    None,
+                    &payload.user_id,
+                    db::audit::EventType::RateLimitExceeded,
+                    Some(serde_json::json!({
+                        "endpoint": "session_create",
+                        "identifier": rate_limit_key
+                    })),
+                    client_ip.as_deref(),
+                    user_agent.as_deref(),
+                ).await;
+
+                return Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": "Rate limit exceeded",
+                        "details": "Too many session creation requests. Please wait.",
+                        "retry_after": 60
+                    })),
+                ));
+            }
+            Err(e) => {
+                debug!("Rate limit check failed: {}", e);
+            }
+            _ => {}
+        }
+    }
+
     // Validate user_id
     if !validate_user_id(&payload.user_id) {
         warn!("Invalid user_id rejected: {}", payload.user_id);
@@ -596,12 +641,6 @@ async fn create_session(
             _ => {}
         }
     }
-
-    // Extract client IP for audit logging
-    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
-    let real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
-    let client_ip = extract_client_ip(xff, real_ip, Some(&addr.to_string()));
-    let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(String::from);
 
     let session_id = Uuid::new_v4();
     let session = Session {
@@ -712,7 +751,13 @@ async fn enable_privacy(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, StatusCode> {
     info!("Enabling privacy mode...");
-    
+
+    // Check if ports are available before starting
+    if let Err(e) = state.anyone_service.check_ports_available().await {
+        warn!("Port check failed: {}", e);
+        // Ports may be in use by a previous instance, continue anyway
+    }
+
     match state.anyone_service.start().await {
         Ok(_) => {
             let socks_port = state.anyone_service.get_socks_port();
@@ -771,6 +816,69 @@ async fn privacy_status(
     };
 
     Json(response)
+}
+
+// Test privacy connection by making a request through the proxy
+async fn test_privacy_connection(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Check if privacy is enabled
+    if !state.anyone_service.is_enabled().await {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "error": "Privacy mode not enabled",
+            "ip": null
+        })));
+    }
+
+    // Get the proxy client
+    let client = match state.anyone_service.get_proxy_client().await {
+        Some(c) => c,
+        None => {
+            return Ok(Json(serde_json::json!({
+                "success": false,
+                "error": "Proxy client not initialized",
+                "ip": null
+            })));
+        }
+    };
+
+    // Test connection by checking IP through the Anyone network
+    match client.get("https://check.en.anyone.tech/api/ip")
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(response) => {
+            match response.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let is_anyone = data.get("IsAnyone").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let ip = data.get("IP").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "is_anonymous": is_anyone,
+                        "exit_ip": ip,
+                        "message": if is_anyone { "Traffic routed through Anyone Protocol network" } else { "Connected but not through Anyone exit" }
+                    })))
+                }
+                Err(e) => {
+                    Ok(Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to parse response: {}", e),
+                        "ip": null
+                    })))
+                }
+            }
+        }
+        Err(e) => {
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "error": format!("Request failed: {}", e),
+                "ip": null
+            })))
+        }
+    }
 }
 
 // ==================== Phase 2 Endpoints ====================
@@ -1133,7 +1241,402 @@ async fn reattach_session(
     }
 }
 
-// ==================== End Phase 2 Endpoints ====================
+// ==================== Production API Endpoints ====================
+
+// Get audit logs for a session
+async fn get_session_audit_logs(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let limit: i64 = params.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    if let Some(ref pool) = state.db_pool {
+        match db::audit::get_by_session(pool, session_id, limit).await {
+            Ok(logs) => {
+                return Ok(Json(serde_json::json!({
+                    "session_id": session_id,
+                    "audit_logs": logs,
+                    "count": logs.len()
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get audit logs: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Get audit logs for a user
+async fn get_user_audit_logs(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !validate_user_id(&user_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let limit: i64 = params.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    if let Some(ref pool) = state.db_pool {
+        match db::audit::get_by_user(pool, &user_id, limit).await {
+            Ok(logs) => {
+                return Ok(Json(serde_json::json!({
+                    "user_id": user_id,
+                    "audit_logs": logs,
+                    "count": logs.len()
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get user audit logs: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Get metrics history for a session
+async fn get_session_metrics_history(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let limit: i64 = params.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    if let Some(ref pool) = state.db_pool {
+        match db::metrics::get_history(pool, session_id, limit).await {
+            Ok(metrics) => {
+                return Ok(Json(serde_json::json!({
+                    "session_id": session_id,
+                    "metrics_history": metrics,
+                    "count": metrics.len()
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get metrics history: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Get recent security events (admin endpoint)
+async fn get_security_events(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let limit: i64 = params.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(50);
+
+    if let Some(ref pool) = state.db_pool {
+        match db::security::get_recent(pool, limit).await {
+            Ok(events) => {
+                return Ok(Json(serde_json::json!({
+                    "security_events": events,
+                    "count": events.len()
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get security events: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Check rate limit status for an identifier
+async fn check_rate_limit_status(
+    State(state): State<AppState>,
+    Path((identifier, endpoint)): Path<(String, String)>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(ref pool) = state.db_pool {
+        match db::rate_limits::get_count(pool, &identifier, &endpoint, 60).await {
+            Ok(count) => {
+                return Ok(Json(serde_json::json!({
+                    "identifier": identifier,
+                    "endpoint": endpoint,
+                    "current_count": count,
+                    "limit": 100,
+                    "window_seconds": 60,
+                    "remaining": (100 - count).max(0)
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get rate limit count: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Update session activity (touch)
+async fn touch_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(ref pool) = state.db_pool {
+        if let Err(e) = db::sessions::touch(pool, session_id).await {
+            error!("Failed to touch session: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        return Ok(Json(serde_json::json!({
+            "status": "updated",
+            "session_id": session_id,
+            "last_activity": chrono::Utc::now()
+        })));
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Get all sessions for a user (different from list_user_containers)
+async fn get_user_sessions(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !validate_user_id(&user_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    if let Some(ref pool) = state.db_pool {
+        match db::sessions::get_by_user(pool, &user_id).await {
+            Ok(sessions) => {
+                return Ok(Json(serde_json::json!({
+                    "user_id": user_id,
+                    "sessions": sessions,
+                    "total": sessions.len()
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get user sessions: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Get active sessions for a user
+async fn get_user_active_sessions(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !validate_user_id(&user_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    if let Some(ref pool) = state.db_pool {
+        match db::sessions::get_active_by_user(pool, &user_id).await {
+            Ok(sessions) => {
+                // Also get container count via lifecycle
+                let container_count = if let Some(ref lifecycle) = state.lifecycle_manager {
+                    lifecycle.get_user_container_count(&user_id).await.unwrap_or(0)
+                } else {
+                    sessions.len() as i64
+                };
+
+                return Ok(Json(serde_json::json!({
+                    "user_id": user_id,
+                    "active_sessions": sessions,
+                    "container_count": container_count,
+                    "max_containers": 3
+                })));
+            }
+            Err(e) => {
+                error!("Failed to get active sessions: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Validate command input (security check endpoint)
+async fn validate_command(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let validation = validate_input(&body);
+
+    // Extract client info for logging
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
+    let client_ip = extract_client_ip(xff, real_ip, Some(&addr.to_string()));
+
+    if !validation.is_safe {
+        // Log security event to database
+        if let Some(ref pool) = state.db_pool {
+            // Get user_id from session
+            let user_id = if let Ok(Some(session)) = db::sessions::get_by_id(pool, session_id).await {
+                session.user_id
+            } else {
+                "unknown".to_string()
+            };
+
+            let severity = match validation.severity {
+                SecuritySeverity::Critical => db::security::Severity::Critical,
+                SecuritySeverity::Warning => db::security::Severity::Warning,
+                _ => db::security::Severity::Info,
+            };
+
+            let _ = db::security::log_event(
+                pool,
+                Some(session_id),
+                &user_id,
+                "command_blocked",
+                severity,
+                validation.reason.as_deref(),
+                Some(&body),
+                client_ip.as_deref(),
+            ).await;
+
+            // Also log audit event
+            let _ = db::audit::log(
+                pool,
+                Some(session_id),
+                &user_id,
+                db::audit::EventType::SecurityViolation,
+                Some(serde_json::json!({
+                    "blocked_command": body,
+                    "reason": validation.reason,
+                    "severity": format!("{:?}", validation.severity)
+                })),
+                client_ip.as_deref(),
+                None,
+            ).await;
+        }
+
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "allowed": false,
+                "reason": validation.reason,
+                "severity": format!("{:?}", validation.severity),
+                "blocked_pattern": validation.blocked_pattern
+            })),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "allowed": true,
+        "command": body
+    })))
+}
+
+// Update container info for a session
+async fn update_session_container(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let container_id = payload.get("container_id")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let container_name = payload.get("container_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| container_id);
+
+    // Sanitize container name
+    let safe_name = sanitize_container_name(container_name);
+
+    if let Some(ref pool) = state.db_pool {
+        if let Err(e) = db::sessions::set_container(pool, session_id, container_id, &safe_name).await {
+            error!("Failed to update session container: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        // Update in-memory cache too
+        {
+            let mut sessions = state.sessions.write().await;
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.container_id = Some(container_id.to_string());
+                session.container_name = Some(safe_name.clone());
+                session.status = "running".to_string();
+            }
+        }
+
+        // Log container started event
+        if let Ok(Some(db_session)) = db::sessions::get_by_id(pool, session_id).await {
+            let _ = db::audit::log(
+                pool,
+                Some(session_id),
+                &db_session.user_id,
+                db::audit::EventType::ContainerStarted,
+                Some(serde_json::json!({
+                    "container_id": container_id,
+                    "container_name": safe_name
+                })),
+                None,
+                None,
+            ).await;
+        }
+
+        return Ok(Json(serde_json::json!({
+            "status": "updated",
+            "session_id": session_id,
+            "container_id": container_id,
+            "container_name": safe_name
+        })));
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Clear disconnection status (reattach helper)
+async fn clear_session_disconnection(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if let Some(ref pool) = state.db_pool {
+        if let Err(e) = db::sessions::clear_disconnection(pool, session_id).await {
+            error!("Failed to clear disconnection: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+
+        // Log audit event
+        if let Ok(Some(db_session)) = db::sessions::get_by_id(pool, session_id).await {
+            let _ = db::audit::log(
+                pool,
+                Some(session_id),
+                &db_session.user_id,
+                db::audit::EventType::SessionConnected,
+                Some(serde_json::json!({
+                    "action": "reconnected"
+                })),
+                None,
+                None,
+            ).await;
+        }
+
+        return Ok(Json(serde_json::json!({
+            "status": "cleared",
+            "session_id": session_id
+        })));
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// ==================== End Production API Endpoints ====================
 
 // WebSocket handler with working terminal
 async fn websocket_handler(
@@ -1854,14 +2357,6 @@ async fn execute_command_with_tty(
     }
 }
 
-async fn execute_command_in_container(
-    docker: &Docker, 
-    container_id: &str, 
-    command: &str
-) -> Result<String> {
-    execute_command_with_tty(docker, container_id, command).await
-}
-
 async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) -> Result<(String, String)> {
     use bollard::image::CreateImageOptions;
 
@@ -1872,7 +2367,7 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
     };
 
     let image = session.container_image.clone();
-    let container_name = format!("noxterm-{}", session_id.to_string().replace("-", "")[0..12].to_lowercase());
+    let container_name = format!("noxterm-session-{}", session_id.to_string().replace("-", "")[0..12].to_lowercase());
 
     // Auto-pull image if not present
     info!("Checking for image: {}", image);
@@ -2173,7 +2668,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         // Basic routes
-        .route("/", get(|| async { Html("<h1>🥷 NOXTERM Backend</h1><p>Terminal service online - Phase 2</p>") }))
+        .route("/", get(|| async { Html("<h1>🥷 NOXTERM Backend</h1><p>Production-ready terminal service v1.2</p>") }))
         .route("/health", get(health_check))
         .route("/health/detailed", get(detailed_health_check))
         .route("/metrics", get(prometheus_metrics))
@@ -2183,14 +2678,28 @@ async fn main() -> Result<()> {
         .route("/api/sessions/:id", get(get_session).delete(terminate_session))
         .route("/api/sessions/:id/reattach", post(reattach_session))
         .route("/api/sessions/:id/metrics", get(get_session_metrics))
+        .route("/api/sessions/:id/metrics/history", get(get_session_metrics_history))
+        .route("/api/sessions/:id/audit", get(get_session_audit_logs))
+        .route("/api/sessions/:id/touch", post(touch_session))
+        .route("/api/sessions/:id/container", post(update_session_container))
+        .route("/api/sessions/:id/reconnect", post(clear_session_disconnection))
+        .route("/api/sessions/:id/validate", post(validate_command))
 
-        // User container management (Phase 2.4)
+        // User management
         .route("/api/users/:user_id/containers", get(list_user_containers))
+        .route("/api/users/:user_id/sessions", get(get_user_sessions))
+        .route("/api/users/:user_id/active", get(get_user_active_sessions))
+        .route("/api/users/:user_id/audit", get(get_user_audit_logs))
+
+        // Admin/Security endpoints
+        .route("/api/security/events", get(get_security_events))
+        .route("/api/ratelimit/:identifier/:endpoint", get(check_rate_limit_status))
 
         // Privacy control
         .route("/api/privacy/enable", post(enable_privacy))
         .route("/api/privacy/disable", post(disable_privacy))
         .route("/api/privacy/status", get(privacy_status))
+        .route("/api/privacy/test", get(test_privacy_connection))
 
         // WebSocket endpoints
         .route("/ws/:session_id", get(websocket_handler))
