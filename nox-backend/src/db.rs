@@ -125,15 +125,6 @@ pub struct SecurityEvent {
     pub created_at: DateTime<Utc>,
 }
 
-/// Rate limit entry
-#[derive(Debug, Clone, FromRow)]
-pub struct RateLimitEntry {
-    pub id: i64,
-    pub identifier: String,
-    pub endpoint: String,
-    pub request_count: i32,
-    pub window_start: DateTime<Utc>,
-}
 
 /// Initialize database connection pool
 pub async fn init_pool(database_url: &str) -> Result<DbPool, sqlx::Error> {
@@ -458,6 +449,7 @@ pub mod audit {
 
     /// Event types for audit logging
     #[derive(Debug, Clone, Serialize)]
+    #[allow(dead_code)] // All variants are valid audit events, even if not all are used yet
     pub enum EventType {
         SessionCreated,
         SessionConnected,
