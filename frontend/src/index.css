@@ -3,19 +3,38 @@
 @import 'tailwindcss/components';
 @import 'tailwindcss/utilities';
 
-/* NØXTERM - Terminal Interface */
+/* NØXTERM - Privacy-First Terminal Interface */
+/* Brand: NON-OS Systems - https://nonos.systems/brand-guidelines */
+
+/* Google Fonts - Poppins */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #64748b;
-  --accent-blue: #3b82f6;
-  --accent-blue-dark: #1e40af;
-  --border-subtle: rgba(148, 163, 184, 0.1);
-  --border-focus: rgba(59, 130, 246, 0.5);
+  /* NON-OS Brand Colors */
+  --nox-primary: #66FFFF;        /* Vibrant teal - innovation */
+  --nox-secondary: #2E5C5C;      /* Darker teal - depth, trust */
+  --nox-primary-dim: rgba(102, 255, 255, 0.1);
+  --nox-primary-glow: rgba(102, 255, 255, 0.3);
+
+  /* Backgrounds */
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #111111;
+  --bg-card: #0d0d0d;
+
+  /* Text */
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0a0;
+  --text-muted: #606060;
+
+  /* Borders */
+  --border-subtle: rgba(102, 255, 255, 0.1);
+  --border-focus: rgba(102, 255, 255, 0.4);
+
+  /* Status */
+  --status-online: #66FFFF;
+  --status-warning: #FFB366;
+  --status-error: #FF6666;
 }
 
 * {
@@ -28,7 +47,7 @@ html, body {
   height: 100%;
   overflow-x: hidden;
   background: var(--bg-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -45,17 +64,20 @@ body {
   z-index: 1;
 }
 
+/* Glass card with NON-OS styling */
 .glass-card {
-  background: var(--bg-secondary);
+  background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: 12px;
   transition: all 0.2s ease-in-out;
 }
 
 .glass-card:hover {
   border-color: var(--border-focus);
+  box-shadow: 0 0 20px var(--nox-primary-dim);
 }
 
+/* Status indicators */
 .status-dot {
   width: 8px;
   height: 8px;
@@ -64,30 +86,37 @@ body {
 }
 
 .status-dot.online {
-  background: #22c55e;
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+  background: var(--nox-primary);
+  box-shadow: 0 0 12px var(--nox-primary-glow);
 }
 
 .status-dot.offline {
-  background: #ef4444;
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+  background: var(--status-error);
+  box-shadow: 0 0 8px rgba(255, 102, 102, 0.4);
 }
 
+/* NON-OS gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-blue) 100%);
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--nox-primary) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  font-weight: 800;
+  font-weight: 600;
 }
 
+/* Teal accent text */
+.text-nox {
+  color: var(--nox-primary);
+}
+
+/* Terminal container */
 .terminal-container {
   position: relative;
   background: var(--bg-primary);
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--border-subtle);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
   font-family: 'JetBrains Mono', 'Fira Code', 'Monaco', monospace;
 }
 
@@ -96,8 +125,9 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Progress indicators */
 .progress-bar {
-  background: rgba(148, 163, 184, 0.1);
+  background: rgba(102, 255, 255, 0.1);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -105,12 +135,12 @@ body {
 
 .progress-fill {
   height: 100%;
-  background: var(--accent-blue);
+  background: linear-gradient(90deg, var(--nox-secondary), var(--nox-primary));
   border-radius: 4px;
   transition: width 0.3s ease-in-out;
 }
 
-/* Clean scrollbar */
+/* Clean scrollbar - NON-OS styled */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -120,15 +150,15 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--text-muted);
+  background: var(--nox-secondary);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background: var(--nox-primary);
 }
 
-/* Terminal styling */
+/* Terminal xterm styling */
 .terminal-container .xterm {
   padding: 0;
   background: transparent;
@@ -143,26 +173,54 @@ body {
   background: transparent !important;
 }
 
-/* Remove all animations and effects */
-* {
-  animation: none !important;
+/* Focus styles - NON-OS teal */
+input:focus,
+button:focus {
+  outline: 2px solid var(--nox-primary);
+  outline-offset: 2px;
+}
+
+/* Button styles */
+.btn-nox {
+  background: linear-gradient(135deg, var(--nox-secondary) 0%, var(--nox-primary) 100%);
+  color: var(--bg-primary);
+  font-weight: 500;
+  border: none;
   transition: all 0.2s ease-in-out;
 }
 
-/* Focus styles */
-input:focus,
-button:focus {
-  outline: 2px solid var(--accent-blue);
-  outline-offset: 2px;
+.btn-nox:hover {
+  box-shadow: 0 0 20px var(--nox-primary-glow);
+  transform: translateY(-1px);
+}
+
+.btn-nox-outline {
+  background: transparent;
+  border: 1px solid var(--nox-primary);
+  color: var(--nox-primary);
+  font-weight: 500;
+  transition: all 0.2s ease-in-out;
+}
+
+.btn-nox-outline:hover {
+  background: var(--nox-primary-dim);
+  box-shadow: 0 0 15px var(--nox-primary-dim);
+}
+
+/* Privacy badge */
+.privacy-badge {
+  background: rgba(102, 255, 255, 0.1);
+  border: 1px solid rgba(102, 255, 255, 0.3);
+  color: var(--nox-primary);
 }
 
 /* Responsive design */
 @media (max-width: 768px) {
   .glass-card {
-    border-radius: 6px;
+    border-radius: 8px;
     margin: 4px;
   }
-  
+
   .terminal-container {
     border-radius: 6px;
   }
