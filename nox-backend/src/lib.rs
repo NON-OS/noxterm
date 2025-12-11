@@ -9,7 +9,7 @@ pub mod security;
 pub use anyone_service::{AnyoneService, ServiceStatus};
 pub use db::DbPool;
 pub use lifecycle::{LifecycleConfig, LifecycleManager, ContainerHealth};
-pub use security::{validate_input, validate_websocket_message, ValidationResult, Severity};
+pub use security::{validate_input, ValidationResult, Severity};
 
 // Re-export commonly used types
 pub use anyhow::{Result, Context};
