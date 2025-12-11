@@ -1,8 +1,8 @@
 {
   "name": "noxterm-frontend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
-  "description": "NOXTERM Frontend - Production-ready terminal interface",
+  "description": "NOXTERM Frontend - Privacy-First Terminal Interface",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc && vite build --mode production",
