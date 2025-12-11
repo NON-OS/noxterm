@@ -1,9 +1,10 @@
 use anyhow::Result;
 use axum::{
-    extract::{State, WebSocketUpgrade, Path, Query},
-    http::StatusCode,
+    extract::{ConnectInfo, State, WebSocketUpgrade, Path, Query},
+    http::{HeaderMap, StatusCode},
+    middleware,
     response::{Html, IntoResponse},
-    routing::{get, post},
+    routing::{get, post, delete},
     Json, Router,
 };
 use tokio::io::AsyncWriteExt;
@@ -21,7 +22,17 @@ use tracing::{info, warn, error, debug};
 use uuid::Uuid;
 
 mod anyone_service;
+mod db;
+mod lifecycle;
+mod security;
+
 use anyone_service::AnyoneService;
+use db::DbPool;
+use lifecycle::{LifecycleConfig, LifecycleManager};
+use security::{validate_input, validate_websocket_message, validate_user_id, validate_image_name, extract_client_ip};
+
+// Re-import sqlx for query execution in handlers
+use sqlx;
 
 /// Cross-platform Docker connection with automatic setup
 async fn connect_docker() -> Result<Docker> {
@@ -456,10 +467,18 @@ async fn install_and_start_colima() -> Result<bool> {
 
 #[derive(Clone)]
 struct AppState {
+    /// In-memory session cache (for fast access, backed by PostgreSQL)
     sessions: Arc<RwLock<HashMap<Uuid, Session>>>,
+    /// Docker client
     docker: Arc<Docker>,
+    /// Application configuration
     config: AppConfig,
+    /// Anyone Protocol service for privacy mode
     anyone_service: Arc<AnyoneService>,
+    /// PostgreSQL connection pool (optional - falls back to in-memory if unavailable)
+    db_pool: Option<DbPool>,
+    /// Lifecycle manager for container cleanup and health monitoring
+    lifecycle_manager: Option<Arc<LifecycleManager>>,
 }
 
 #[derive(Clone, Debug)]
@@ -524,11 +543,66 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
-// Create session endpoint
+// Create session endpoint with validation and database persistence
 async fn create_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<CreateSessionRequest>,
-) -> Result<impl IntoResponse, StatusCode> {
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    // Validate user_id
+    if !validate_user_id(&payload.user_id) {
+        warn!("Invalid user_id rejected: {}", payload.user_id);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid user_id format",
+                "details": "User ID must be alphanumeric with underscores/hyphens only"
+            })),
+        ));
+    }
+
+    // Validate container image if provided
+    let container_image = payload.container_image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+    if !validate_image_name(&container_image) {
+        warn!("Invalid container image rejected: {}", container_image);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid container image",
+                "details": "Container image name contains invalid characters"
+            })),
+        ));
+    }
+
+    // Check container limit if lifecycle manager is available
+    if let Some(ref lifecycle) = state.lifecycle_manager {
+        match lifecycle.can_create_container(&payload.user_id).await {
+            Ok(false) => {
+                warn!("User {} at container limit", payload.user_id);
+                return Err((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": "Container limit reached",
+                        "details": "Maximum of 3 containers per user allowed",
+                        "max_containers": 3
+                    })),
+                ));
+            }
+            Err(e) => {
+                error!("Failed to check container limit: {}", e);
+                // Continue anyway - don't block user due to DB issues
+            }
+            _ => {}
+        }
+    }
+
+    // Extract client IP for audit logging
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    let real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
+    let client_ip = extract_client_ip(xff, real_ip, Some(&addr.to_string()));
+    let user_agent = headers.get("user-agent").and_then(|v| v.to_str().ok()).map(String::from);
+
     let session_id = Uuid::new_v4();
     let session = Session {
         id: session_id,
@@ -537,12 +611,47 @@ async fn create_session(
         container_id: None,
         container_name: None,
         created_at: chrono::Utc::now(),
-        container_image: payload.container_image.unwrap_or_else(|| "ubuntu:22.04".to_string()),
+        container_image: container_image.clone(),
     };
 
     let websocket_url = format!("ws://{}:{}/ws/{}", state.config.host, state.config.port, session_id);
 
-    // Store session
+    // Persist to database if available
+    if let Some(ref pool) = state.db_pool {
+        let resource_limits = db::ResourceLimits {
+            memory_mb: 1024,
+            cpu_percent: 100,
+            pids_limit: 200,
+        };
+
+        if let Err(e) = db::sessions::create(
+            pool,
+            session_id,
+            &payload.user_id,
+            &container_image,
+            Some(resource_limits),
+        ).await {
+            error!("Failed to persist session to database: {}", e);
+            // Continue with in-memory storage
+        }
+
+        // Log audit event
+        let _ = db::audit::log(
+            pool,
+            Some(session_id),
+            &payload.user_id,
+            db::audit::EventType::SessionCreated,
+            Some(serde_json::json!({
+                "container_image": container_image,
+                "websocket_url": websocket_url
+            })),
+            client_ip.as_deref(),
+            user_agent.as_deref(),
+        )
+        .await;
+    }
+
+    // Store in memory cache
     {
         let mut sessions = state.sessions.write().await;
         sessions.insert(session_id, session);
@@ -653,16 +762,378 @@ async fn privacy_status(
 ) -> impl IntoResponse {
     let enabled = state.anyone_service.is_enabled().await;
     let service_status = state.anyone_service.get_status().await;
-    
+
     let response = PrivacyStatusResponse {
         enabled,
         socks_port: if enabled { Some(state.anyone_service.get_socks_port()) } else { None },
         control_port: if enabled { Some(state.anyone_service.get_control_port()) } else { None },
         status: format!("{:?}", service_status),
     };
-    
+
     Json(response)
 }
+
+// ==================== Phase 2 Endpoints ====================
+
+// List containers for a specific user (max 3)
+async fn list_user_containers(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> impl IntoResponse {
+    // Validate user_id
+    if !validate_user_id(&user_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Invalid user_id format"
+            })),
+        ).into_response();
+    }
+
+    // Get from database if available
+    if let Some(ref pool) = state.db_pool {
+        match db::sessions::list(pool, Some(&user_id), None, 10).await {
+            Ok(sessions) => {
+                return Json(serde_json::json!({
+                    "user_id": user_id,
+                    "containers": sessions,
+                    "count": sessions.len(),
+                    "max_allowed": 3
+                })).into_response();
+            }
+            Err(e) => {
+                error!("Failed to list user containers from DB: {}", e);
+                // Fall through to in-memory
+            }
+        }
+    }
+
+    // Fallback to in-memory
+    let sessions = state.sessions.read().await;
+    let user_sessions: Vec<&Session> = sessions
+        .values()
+        .filter(|s| s.user_id == user_id)
+        .collect();
+
+    Json(serde_json::json!({
+        "user_id": user_id,
+        "containers": user_sessions,
+        "count": user_sessions.len(),
+        "max_allowed": 3
+    })).into_response()
+}
+
+// Terminate a session
+async fn terminate_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    info!("Terminating session {}", session_id);
+
+    // Get session info
+    let session = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    };
+
+    let session = match session {
+        Some(s) => s,
+        None => {
+            warn!("Session {} not found for termination", session_id);
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
+
+    // Stop container if exists
+    if let Some(ref container_id) = session.container_id {
+        if let Some(ref lifecycle) = state.lifecycle_manager {
+            if let Err(e) = lifecycle.stop_container(container_id).await {
+                warn!("Failed to stop container {}: {}", container_id, e);
+            }
+        } else {
+            // Direct Docker stop
+            let _ = state.docker.stop_container(container_id, None).await;
+            let _ = state.docker.remove_container(container_id, None).await;
+        }
+    }
+
+    // Update database if available
+    if let Some(ref pool) = state.db_pool {
+        if let Err(e) = db::sessions::terminate(pool, session_id).await {
+            error!("Failed to terminate session in DB: {}", e);
+        }
+
+        // Log audit event
+        let _ = db::audit::log(
+            pool,
+            Some(session_id),
+            &session.user_id,
+            db::audit::EventType::SessionTerminated,
+            Some(serde_json::json!({
+                "reason": "user_requested"
+            })),
+            None,
+            None,
+        )
+        .await;
+    }
+
+    // Remove from in-memory cache
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.remove(&session_id);
+    }
+
+    // Remove from lifecycle health cache
+    if let Some(ref lifecycle) = state.lifecycle_manager {
+        lifecycle.remove_from_cache(session_id).await;
+    }
+
+    info!("Session {} terminated successfully", session_id);
+
+    Ok(Json(serde_json::json!({
+        "status": "terminated",
+        "session_id": session_id
+    })))
+}
+
+// Get session metrics (CPU, memory, network)
+async fn get_session_metrics(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    // Get from lifecycle manager cache first
+    if let Some(ref lifecycle) = state.lifecycle_manager {
+        if let Some(health) = lifecycle.get_health(session_id).await {
+            return Ok(Json(serde_json::json!({
+                "session_id": session_id,
+                "container_id": health.container_id,
+                "is_running": health.is_running,
+                "cpu_percent": health.cpu_percent,
+                "memory_usage": health.memory_usage,
+                "memory_limit": health.memory_limit,
+                "network_rx": health.network_rx,
+                "network_tx": health.network_tx,
+                "last_check": health.last_check,
+                "source": "live"
+            })));
+        }
+    }
+
+    // Fallback to database historical metrics
+    if let Some(ref pool) = state.db_pool {
+        match db::metrics::get_latest(pool, session_id).await {
+            Ok(Some(metrics)) => {
+                return Ok(Json(serde_json::json!({
+                    "session_id": session_id,
+                    "cpu_percent": metrics.cpu_percent,
+                    "memory_usage": metrics.memory_usage,
+                    "memory_limit": metrics.memory_limit,
+                    "network_rx": metrics.network_rx,
+                    "network_tx": metrics.network_tx,
+                    "recorded_at": metrics.recorded_at,
+                    "source": "database"
+                })));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!("Failed to get metrics from DB: {}", e);
+            }
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
+}
+
+// Detailed health check with database status
+async fn detailed_health_check(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let docker_ok = state.docker.ping().await.is_ok();
+    let db_ok = if let Some(ref pool) = state.db_pool {
+        sqlx::query("SELECT 1")
+            .fetch_one(pool)
+            .await
+            .is_ok()
+    } else {
+        false
+    };
+
+    let anyone_status = state.anyone_service.get_status().await;
+    let active_sessions = state.sessions.read().await.len();
+
+    let status = if docker_ok { "healthy" } else { "degraded" };
+
+    Json(serde_json::json!({
+        "status": status,
+        "service": "noxterm-production",
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_time": env!("BUILD_TIME"),
+        "git_hash": env!("GIT_HASH"),
+        "components": {
+            "docker": docker_ok,
+            "database": db_ok,
+            "anyone_protocol": format!("{:?}", anyone_status)
+        },
+        "metrics": {
+            "active_sessions": active_sessions
+        },
+        "timestamp": chrono::Utc::now()
+    }))
+}
+
+// Prometheus-compatible metrics endpoint
+async fn prometheus_metrics(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let active_sessions = state.sessions.read().await.len();
+    let anyone_enabled = state.anyone_service.is_enabled().await;
+
+    // Get all health data if available
+    let mut total_cpu = 0.0f64;
+    let mut total_memory: i64 = 0;
+    let mut container_count = 0;
+
+    if let Some(ref lifecycle) = state.lifecycle_manager {
+        let health_data = lifecycle.get_all_health().await;
+        for health in &health_data {
+            if let Some(cpu) = health.cpu_percent {
+                total_cpu += cpu;
+            }
+            if let Some(mem) = health.memory_usage {
+                total_memory += mem;
+            }
+            container_count += 1;
+        }
+    }
+
+    // Format as Prometheus text format
+    let metrics = format!(
+        "# HELP noxterm_active_sessions Number of active sessions\n\
+         # TYPE noxterm_active_sessions gauge\n\
+         noxterm_active_sessions {}\n\
+         # HELP noxterm_containers_total Total running containers\n\
+         # TYPE noxterm_containers_total gauge\n\
+         noxterm_containers_total {}\n\
+         # HELP noxterm_cpu_usage_percent Total CPU usage percent\n\
+         # TYPE noxterm_cpu_usage_percent gauge\n\
+         noxterm_cpu_usage_percent {:.2}\n\
+         # HELP noxterm_memory_usage_bytes Total memory usage in bytes\n\
+         # TYPE noxterm_memory_usage_bytes gauge\n\
+         noxterm_memory_usage_bytes {}\n\
+         # HELP noxterm_privacy_enabled Privacy mode status (1=enabled, 0=disabled)\n\
+         # TYPE noxterm_privacy_enabled gauge\n\
+         noxterm_privacy_enabled {}\n",
+        active_sessions,
+        container_count,
+        total_cpu,
+        total_memory,
+        if anyone_enabled { 1 } else { 0 }
+    );
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; charset=utf-8")],
+        metrics,
+    )
+}
+
+// Reattach to a disconnected session
+async fn reattach_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    info!("Reattach request for session {}", session_id);
+
+    // Check if session exists in database
+    if let Some(ref pool) = state.db_pool {
+        match db::sessions::get_by_id(pool, session_id).await {
+            Ok(Some(db_session)) => {
+                // Check if session is reattachable (disconnected but not expired)
+                if db_session.status == "disconnected" {
+                    if let Some(expires_at) = db_session.expires_at {
+                        if expires_at > chrono::Utc::now() {
+                            // Session is still within grace period - reattach
+                            if let Err(e) = db::sessions::update_status(pool, session_id, db::SessionStatus::Running).await {
+                                error!("Failed to update session status: {}", e);
+                            }
+
+                            // Update in-memory cache
+                            {
+                                let mut sessions = state.sessions.write().await;
+                                if let Some(session) = sessions.get_mut(&session_id) {
+                                    session.status = "running".to_string();
+                                }
+                            }
+
+                            let websocket_url = format!(
+                                "ws://{}:{}/pty/{}",
+                                state.config.host, state.config.port, session_id
+                            );
+
+                            info!("Session {} reattached successfully", session_id);
+
+                            return Ok(Json(serde_json::json!({
+                                "status": "reattached",
+                                "session_id": session_id,
+                                "container_id": db_session.container_id,
+                                "websocket_url": websocket_url,
+                                "message": "Session reattached successfully"
+                            })));
+                        }
+                    }
+                }
+
+                // Session exists but not reattachable
+                return Err((
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "Session not reattachable",
+                        "status": db_session.status,
+                        "details": "Session has expired or is still active"
+                    })),
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!("Failed to get session from DB: {}", e);
+            }
+        }
+    }
+
+    // Check in-memory
+    let session = state.sessions.read().await.get(&session_id).cloned();
+    match session {
+        Some(s) if s.status == "running" && s.container_id.is_some() => {
+            let websocket_url = format!(
+                "ws://{}:{}/pty/{}",
+                state.config.host, state.config.port, session_id
+            );
+            Ok(Json(serde_json::json!({
+                "status": "active",
+                "session_id": session_id,
+                "container_id": s.container_id,
+                "websocket_url": websocket_url,
+                "message": "Session is already active"
+            })))
+        }
+        Some(_) => Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Session not reattachable",
+                "details": "Container no longer running"
+            })),
+        )),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "Session not found"
+            })),
+        )),
+    }
+}
+
+// ==================== End Phase 2 Endpoints ====================
 
 // WebSocket handler with working terminal
 async fn websocket_handler(
@@ -1618,25 +2089,116 @@ async fn main() -> Result<()> {
         }
     });
 
+    // ==================== Phase 2: Database & Lifecycle Initialization ====================
+
+    // Initialize PostgreSQL connection pool (optional - graceful degradation)
+    let db_pool: Option<DbPool> = match std::env::var("DATABASE_URL") {
+        Ok(database_url) => {
+            info!("Connecting to PostgreSQL...");
+            match db::init_pool(&database_url).await {
+                Ok(pool) => {
+                    // Run migrations
+                    info!("Running database migrations...");
+                    if let Err(e) = db::run_migrations(&pool).await {
+                        error!("Database migration failed: {}", e);
+                        warn!("Continuing without database - using in-memory session storage");
+                        None
+                    } else {
+                        info!("✅ PostgreSQL connected and migrations complete");
+                        Some(pool)
+                    }
+                }
+                Err(e) => {
+                    error!("Database connection failed: {}", e);
+                    warn!("Continuing without database - using in-memory session storage");
+                    None
+                }
+            }
+        }
+        Err(_) => {
+            info!("DATABASE_URL not set - using in-memory session storage");
+            info!("For production, set DATABASE_URL=postgresql://user:pass@host/noxterm");
+            None
+        }
+    };
+
+    // Initialize lifecycle manager (requires database)
+    let lifecycle_manager: Option<Arc<LifecycleManager>> = if let Some(ref pool) = db_pool {
+        let lifecycle_config = LifecycleConfig {
+            grace_period_secs: std::env::var("GRACE_PERIOD_SECONDS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300), // 5 minutes default
+            cleanup_interval_secs: 60,
+            health_check_interval_secs: 30,
+            metrics_interval_secs: 15,
+            max_containers_per_user: std::env::var("MAX_CONTAINERS_PER_USER")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+        };
+
+        let manager = Arc::new(LifecycleManager::new(
+            docker.clone(),
+            pool.clone(),
+            lifecycle_config.clone(),
+        ));
+
+        // Start background lifecycle tasks
+        let lifecycle_clone = manager.clone();
+        tokio::spawn(async move {
+            lifecycle_clone.start().await;
+        });
+
+        info!("✅ Lifecycle manager started (grace period: {}s, max containers: {})",
+            lifecycle_config.grace_period_secs,
+            lifecycle_config.max_containers_per_user);
+
+        Some(manager)
+    } else {
+        info!("Lifecycle manager disabled (no database)");
+        None
+    };
+
+    // ==================== End Phase 2 Initialization ====================
+
     let app_state = AppState {
         sessions: Arc::new(RwLock::new(HashMap::new())),
         docker: Arc::new(docker),
         config: config.clone(),
         anyone_service,
+        db_pool,
+        lifecycle_manager,
     };
 
     let app = Router::new()
-        .route("/", get(|| async { Html("<h1>🥷 NOXTERM Backend</h1><p>Terminal service online</p>") }))
+        // Basic routes
+        .route("/", get(|| async { Html("<h1>🥷 NOXTERM Backend</h1><p>Terminal service online - Phase 2</p>") }))
         .route("/health", get(health_check))
+        .route("/health/detailed", get(detailed_health_check))
+        .route("/metrics", get(prometheus_metrics))
+
+        // Session management
         .route("/api/sessions", post(create_session).get(list_sessions))
-        .route("/api/sessions/:id", get(get_session))
+        .route("/api/sessions/:id", get(get_session).delete(terminate_session))
+        .route("/api/sessions/:id/reattach", post(reattach_session))
+        .route("/api/sessions/:id/metrics", get(get_session_metrics))
+
+        // User container management (Phase 2.4)
+        .route("/api/users/:user_id/containers", get(list_user_containers))
+
+        // Privacy control
         .route("/api/privacy/enable", post(enable_privacy))
         .route("/api/privacy/disable", post(disable_privacy))
         .route("/api/privacy/status", get(privacy_status))
+
+        // WebSocket endpoints
         .route("/ws/:session_id", get(websocket_handler))
         .route("/pty/:session_id", get(pty_websocket_handler))
+
         .layer(CorsLayer::permissive())
-        .with_state(app_state);
+        .with_state(app_state)
+        .into_make_service_with_connect_info::<SocketAddr>();
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("🌐 Server listening on {}", addr);
@@ -1644,9 +2206,16 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", addr, e))?;
-    
-    info!("✅ NOXTERM Backend Ready");
-    
+
+    info!("✅ NOXTERM Backend Ready (Phase 2)");
+    info!("📡 New API endpoints available:");
+    info!("   GET  /health/detailed        - Detailed health with DB status");
+    info!("   GET  /metrics                - Prometheus metrics");
+    info!("   GET  /api/users/:id/containers - List user containers (max 3)");
+    info!("   POST /api/sessions/:id/reattach - Reattach to session");
+    info!("   GET  /api/sessions/:id/metrics  - Container metrics");
+    info!("   DELETE /api/sessions/:id        - Terminate session");
+
     axum::serve(listener, app)
         .await
         .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
