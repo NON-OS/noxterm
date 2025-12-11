@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::path::Path;
 use tokio::sync::{RwLock, Mutex};
 use tokio::time::{sleep, Duration, timeout};
-use tracing::{info, warn, debug, error};
+use tracing::{info, warn, debug};
 use reqwest::Client;
 use tokio::process::{Child, Command as TokioCommand};
 use anyhow::{Result, Context};
