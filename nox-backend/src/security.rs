@@ -190,66 +190,6 @@ pub fn validate_input(input: &str) -> ValidationResult {
     ValidationResult::default()
 }
 
-/// Validate WebSocket message
-pub fn validate_websocket_message(message: &str) -> ValidationResult {
-    // Check message size
-    if message.len() > 65536 {
-        return ValidationResult {
-            is_safe: false,
-            reason: Some("WebSocket message too large".to_string()),
-            severity: Severity::Warning,
-            blocked_pattern: None,
-        };
-    }
-
-    // For resize messages, validate JSON structure
-    if message.starts_with('{') {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(message) {
-            // Validate resize command
-            if let Some(resize) = json.get("resize") {
-                if let Some(arr) = resize.as_array() {
-                    if arr.len() == 2 {
-                        let cols = arr[0].as_i64().unwrap_or(0);
-                        let rows = arr[1].as_i64().unwrap_or(0);
-
-                        // Validate reasonable terminal dimensions
-                        if cols < 1 || cols > 500 || rows < 1 || rows > 200 {
-                            return ValidationResult {
-                                is_safe: false,
-                                reason: Some("Invalid terminal dimensions".to_string()),
-                                severity: Severity::Warning,
-                                blocked_pattern: None,
-                            };
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // Regular terminal input - validate content
-        return validate_input(message);
-    }
-
-    ValidationResult::default()
-}
-
-/// Sanitize environment variable value
-pub fn sanitize_env_value(value: &str) -> String {
-    // Remove potentially dangerous characters
-    value
-        .chars()
-        .filter(|c| {
-            c.is_alphanumeric()
-                || *c == '_'
-                || *c == '-'
-                || *c == '.'
-                || *c == '/'
-                || *c == ':'
-                || *c == ' '
-        })
-        .collect()
-}
-
 /// Sanitize container name
 pub fn sanitize_container_name(name: &str) -> String {
     name.chars()
@@ -280,55 +220,6 @@ pub fn validate_image_name(image: &str) -> bool {
     // Must not contain dangerous characters
     let invalid_chars = ['$', '`', '|', ';', '&', '>', '<', '\\', '"', '\''];
     !image.chars().any(|c| invalid_chars.contains(&c))
-}
-
-/// Rate limit configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RateLimitConfig {
-    /// Maximum requests per window
-    pub max_requests: u32,
-    /// Window size in seconds
-    pub window_seconds: u64,
-}
-
-impl Default for RateLimitConfig {
-    fn default() -> Self {
-        Self {
-            max_requests: 100,
-            window_seconds: 60,
-        }
-    }
-}
-
-/// Rate limit configurations for different endpoints
-pub struct RateLimits {
-    pub session_create: RateLimitConfig,
-    pub api_general: RateLimitConfig,
-    pub websocket_connect: RateLimitConfig,
-    pub websocket_message: RateLimitConfig,
-}
-
-impl Default for RateLimits {
-    fn default() -> Self {
-        Self {
-            session_create: RateLimitConfig {
-                max_requests: 10,
-                window_seconds: 60,
-            },
-            api_general: RateLimitConfig {
-                max_requests: 100,
-                window_seconds: 60,
-            },
-            websocket_connect: RateLimitConfig {
-                max_requests: 30,
-                window_seconds: 60,
-            },
-            websocket_message: RateLimitConfig {
-                max_requests: 1000,
-                window_seconds: 60,
-            },
-        }
-    }
 }
 
 /// Extract client IP from request headers (supports proxies)
