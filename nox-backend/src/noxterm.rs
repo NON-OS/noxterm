@@ -1404,6 +1404,39 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
         info!("Successfully pulled image: {}", image);
     }
 
+    // Check if privacy mode is enabled and get proxy settings
+    let privacy_enabled = state.anyone_service.is_enabled().await;
+    let socks_port = state.anyone_service.get_socks_port();
+
+    // Build environment variables - add proxy settings if privacy is enabled
+    let mut env_vars = vec![
+        "DEBIAN_FRONTEND=noninteractive".to_string(),
+        "TERM=xterm-256color".to_string(),
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+        "HOME=/root".to_string(),
+        "SHELL=/bin/bash".to_string(),
+        "LANG=en_US.UTF-8".to_string(),
+        "LC_ALL=en_US.UTF-8".to_string(),
+    ];
+
+    if privacy_enabled {
+        // Use host.docker.internal - works on all platforms with extra_hosts mapping
+        let proxy_host = "host.docker.internal";
+        let proxy_url = format!("socks5://{}:{}", proxy_host, socks_port);
+        info!("🔐 Privacy mode enabled - configuring container proxy: {}", proxy_url);
+
+        env_vars.push(format!("HTTP_PROXY={}", proxy_url));
+        env_vars.push(format!("HTTPS_PROXY={}", proxy_url));
+        env_vars.push(format!("http_proxy={}", proxy_url));
+        env_vars.push(format!("https_proxy={}", proxy_url));
+        env_vars.push(format!("ALL_PROXY={}", proxy_url));
+        env_vars.push(format!("all_proxy={}", proxy_url));
+        env_vars.push("NO_PROXY=localhost,127.0.0.1".to_string());
+        env_vars.push("no_proxy=localhost,127.0.0.1".to_string());
+        env_vars.push(format!("NOXTERM_PRIVACY=enabled"));
+        env_vars.push(format!("NOXTERM_SOCKS_PROXY={}:{}", proxy_host, socks_port));
+    }
+
     let config = Config {
         image: Some(image),
         cmd: Some(vec![
@@ -1411,15 +1444,7 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
             "-c".to_string(),
             "DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y nano vim curl wget git htop neofetch locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && tail -f /dev/null".to_string()
         ]),
-        env: Some(vec![
-            "DEBIAN_FRONTEND=noninteractive".to_string(),
-            "TERM=xterm-256color".to_string(),
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
-            "HOME=/root".to_string(),
-            "SHELL=/bin/bash".to_string(),
-            "LANG=en_US.UTF-8".to_string(),
-            "LC_ALL=en_US.UTF-8".to_string(),
-        ]),
+        env: Some(env_vars),
         working_dir: Some("/root".to_string()),
         user: Some("root".to_string()),
         host_config: Some(HostConfig {
@@ -1428,13 +1453,16 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
             cpu_quota: Some(100000), // 1 CPU
             cpu_period: Some(100000),
             pids_limit: Some(200),
-            
+
             auto_remove: Some(true),
             privileged: Some(false),
             readonly_rootfs: Some(false),
-            
+
             network_mode: Some("bridge".to_string()),
-            
+
+            // Add host.docker.internal mapping for all platforms (ensures consistent behavior)
+            extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
+
             cap_add: Some(vec![
                 "SETUID".to_string(),
                 "SETGID".to_string(),
@@ -1442,7 +1470,7 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
                 "DAC_OVERRIDE".to_string(),
                 "FOWNER".to_string(),
             ]),
-            
+
             ..Default::default()
         }),
         ..Default::default()
