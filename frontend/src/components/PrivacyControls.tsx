@@ -94,74 +94,80 @@ export const PrivacyControls: React.FC<PrivacyControlsProps> = ({ onPrivacyChang
 
   const getStatusColor = () => {
     switch (circuitStatus) {
-      case 'connected': return 'text-green-400';
-      case 'connecting': return 'text-yellow-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'connected': return 'text-[#66FFFF]';
+      case 'connecting': return 'text-[#FFB366]';
+      case 'error': return 'text-[#FF6666]';
+      default: return 'text-gray-500';
     }
   };
 
-  const getStatusIcon = () => {
+  const getStatusDotColor = () => {
     switch (circuitStatus) {
-      case 'connected': return '🟢';
-      case 'connecting': return '🟡';
-      case 'error': return '🔴';
-      default: return '⚫';
+      case 'connected': return 'bg-[#66FFFF]';
+      case 'connecting': return 'bg-[#FFB366]';
+      case 'error': return 'bg-[#FF6666]';
+      default: return 'bg-gray-500';
     }
   };
 
   return (
-    <div className="privacy-controls bg-gray-800/50 rounded-xl p-4 mb-6 border border-gray-600">
+    <div className="glass-card p-5 mb-6 max-w-xl mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-          🛡️ Network Privacy Protection
-        </h3>
-        
-        <button 
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-[rgba(102,255,255,0.1)] flex items-center justify-center">
+            <svg className="w-4 h-4 text-[#66FFFF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <h3 className="text-base font-medium text-white">Network Privacy</h3>
+        </div>
+
+        <button
           onClick={togglePrivacy}
           disabled={isLoading}
-          className={`px-4 py-2 rounded-lg font-medium transition-all ${
-            privacyEnabled 
-              ? 'bg-green-600 hover:bg-green-700 text-white' 
-              : 'bg-gray-600 hover:bg-gray-500 text-white'
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+            privacyEnabled
+              ? 'bg-[#2E5C5C] text-[#66FFFF] border border-[#66FFFF]/30'
+              : 'bg-[#111] text-gray-400 border border-gray-700 hover:border-gray-600'
           } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
-          {isLoading ? 'Processing...' : (privacyEnabled ? 'Privacy ON' : 'Privacy OFF')}
+          {isLoading ? 'Processing...' : (privacyEnabled ? 'Enabled' : 'Disabled')}
         </button>
       </div>
-      
+
       <div className="flex items-center justify-between">
         <div className="circuit-status flex items-center gap-2">
-          <span className="text-lg">{getStatusIcon()}</span>
-          <span className={`text-sm font-medium ${getStatusColor()}`}>
-            Onion Circuit: {circuitStatus.toUpperCase()}
+          <span className={`w-2 h-2 rounded-full ${getStatusDotColor()}`}></span>
+          <span className={`text-sm font-mono ${getStatusColor()}`}>
+            Circuit: {circuitStatus.toUpperCase()}
           </span>
         </div>
-        
+
         {privacyEnabled && (
-          <div className="text-xs text-green-400 bg-green-900/30 px-3 py-1 rounded-full">
-            🔐 IP Hidden via Anyone Network
+          <div className="privacy-badge text-xs px-3 py-1 rounded-full">
+            IP Hidden
           </div>
         )}
       </div>
-      
+
       {circuitStatus === 'error' && (
-        <div className="mt-3 p-3 bg-red-900/30 border border-red-500/30 rounded-lg">
-          <p className="text-red-400 text-sm">
-            ⚠️ Failed to establish anonymous connection. Please check your internet connection and try again.
+        <div className="mt-3 p-3 bg-[#FF6666]/10 border border-[#FF6666]/30 rounded-lg">
+          <p className="text-[#FF6666] text-sm">
+            Failed to establish anonymous connection. Check your connection and try again.
           </p>
         </div>
       )}
-      
+
       {privacyEnabled && circuitStatus === 'connected' && (
-        <div className="mt-3 p-3 bg-green-900/30 border border-green-500/30 rounded-lg">
-          <p className="text-green-400 text-sm">
-            ✅ Your terminal traffic is now routed through the Anyone onion network for maximum privacy.
-            <br />
-            <span className="text-green-300">• Your real IP address is hidden</span><br />
-            <span className="text-green-300">• All traffic is encrypted through multiple hops</span><br />
-            <span className="text-green-300">• Container networking is anonymized</span>
+        <div className="mt-3 p-3 bg-[rgba(102,255,255,0.05)] border border-[rgba(102,255,255,0.2)] rounded-lg">
+          <p className="text-[#66FFFF] text-sm">
+            Traffic routed through Anyone onion network.
           </p>
+          <ul className="mt-2 text-gray-500 text-xs space-y-1">
+            <li>Real IP address hidden</li>
+            <li>Multi-hop encryption active</li>
+            <li>Container networking anonymized</li>
+          </ul>
         </div>
       )}
     </div>
