@@ -996,33 +996,64 @@ async fn handle_pty_websocket(
         }
     };
 
-    // Create a proper interactive shell with full PTY support
-    // Use bash with login + interactive flags for proper terminal setup
-    let exec_config = CreateExecOptions {
-        cmd: Some(vec![
+    // Check if privacy mode is enabled
+    let privacy_enabled = state.anyone_service.is_enabled().await;
+    let socks_port = state.anyone_service.get_socks_port();
+
+    // Build shell command - if privacy enabled, setup proxy config first
+    let shell_cmd = if privacy_enabled {
+        vec![
+            "/bin/bash".to_string(),
+            "-c".to_string(),
+            format!(
+                "echo '--socks5-hostname host.docker.internal:{}' > ~/.curlrc && \
+                 echo 'proxy = socks5h://host.docker.internal:{}' >> ~/.curlrc && \
+                 export ALL_PROXY=socks5h://host.docker.internal:{} && \
+                 export all_proxy=socks5h://host.docker.internal:{} && \
+                 echo '🔐 Privacy mode ACTIVE - traffic routed through Anyone Protocol' && \
+                 exec /bin/bash --login -i",
+                socks_port, socks_port, socks_port, socks_port
+            ),
+        ]
+    } else {
+        vec![
             "/bin/bash".to_string(),
             "--login".to_string(),
             "-i".to_string(),
-        ]),
+        ]
+    };
+
+    // Build env vars - add proxy env if privacy enabled
+    let mut exec_env = vec![
+        "TERM=xterm-256color".to_string(),
+        "COLORTERM=truecolor".to_string(),
+        "DEBIAN_FRONTEND=noninteractive".to_string(),
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
+        "HOME=/root".to_string(),
+        "SHELL=/bin/bash".to_string(),
+        "USER=root".to_string(),
+        "LANG=en_US.UTF-8".to_string(),
+        "LC_ALL=en_US.UTF-8".to_string(),
+        "LC_CTYPE=en_US.UTF-8".to_string(),
+        "EDITOR=nano".to_string(),
+        "VISUAL=nano".to_string(),
+    ];
+
+    if privacy_enabled {
+        let proxy_url = format!("socks5h://host.docker.internal:{}", socks_port);
+        exec_env.push(format!("ALL_PROXY={}", proxy_url));
+        exec_env.push(format!("all_proxy={}", proxy_url));
+        exec_env.push(format!("NOXTERM_PRIVACY=enabled"));
+    }
+
+    // Create a proper interactive shell with full PTY support
+    let exec_config = CreateExecOptions {
+        cmd: Some(shell_cmd),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
         attach_stdin: Some(true),
         tty: Some(true),
-        env: Some(vec![
-            "TERM=xterm-256color".to_string(),
-            "COLORTERM=truecolor".to_string(),
-            "DEBIAN_FRONTEND=noninteractive".to_string(),
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
-            "HOME=/root".to_string(),
-            "SHELL=/bin/bash".to_string(),
-            "USER=root".to_string(),
-            "LANG=en_US.UTF-8".to_string(),
-            "LC_ALL=en_US.UTF-8".to_string(),
-            "LC_CTYPE=en_US.UTF-8".to_string(),
-            // Nano-specific settings
-            "EDITOR=nano".to_string(),
-            "VISUAL=nano".to_string(),
-        ]),
+        env: Some(exec_env),
         working_dir: Some("/root".to_string()),
         ..Default::default()
     };
@@ -1420,29 +1451,25 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
     ];
 
     if privacy_enabled {
-        // Use host.docker.internal - works on all platforms with extra_hosts mapping
+        // Mark privacy mode - actual proxy config done when PTY shell starts
+        // DON'T set HTTP_PROXY here as it breaks apt-get during container setup
         let proxy_host = "host.docker.internal";
-        let proxy_url = format!("socks5://{}:{}", proxy_host, socks_port);
-        info!("🔐 Privacy mode enabled - configuring container proxy: {}", proxy_url);
-
-        env_vars.push(format!("HTTP_PROXY={}", proxy_url));
-        env_vars.push(format!("HTTPS_PROXY={}", proxy_url));
-        env_vars.push(format!("http_proxy={}", proxy_url));
-        env_vars.push(format!("https_proxy={}", proxy_url));
-        env_vars.push(format!("ALL_PROXY={}", proxy_url));
-        env_vars.push(format!("all_proxy={}", proxy_url));
-        env_vars.push("NO_PROXY=localhost,127.0.0.1".to_string());
-        env_vars.push("no_proxy=localhost,127.0.0.1".to_string());
-        env_vars.push(format!("NOXTERM_PRIVACY=enabled"));
+        info!("🔐 Privacy mode enabled - proxy will be configured on shell start");
+        env_vars.push("NOXTERM_PRIVACY=enabled".to_string());
         env_vars.push(format!("NOXTERM_SOCKS_PROXY={}:{}", proxy_host, socks_port));
     }
+
+    // Build container startup command - same for both modes, proxy config happens via env vars and .curlrc
+    let startup_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y nano vim curl wget git htop neofetch locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && tail -f /dev/null".to_string();
+
+    // For privacy mode, we'll configure curl via .curlrc AFTER container starts (in PTY handler)
 
     let config = Config {
         image: Some(image),
         cmd: Some(vec![
             "/bin/bash".to_string(),
             "-c".to_string(),
-            "DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y nano vim curl wget git htop neofetch locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && tail -f /dev/null".to_string()
+            startup_cmd,
         ]),
         env: Some(env_vars),
         working_dir: Some("/root".to_string()),
