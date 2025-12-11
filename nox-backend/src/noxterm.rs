@@ -2425,8 +2425,8 @@ async fn start_container(docker: &Docker, session_id: Uuid, state: &AppState) ->
         env_vars.push(format!("NOXTERM_SOCKS_PROXY={}:{}", proxy_host, socks_port));
     }
 
-    // Build container startup command - same for both modes, proxy config happens via env vars and .curlrc
-    let startup_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y nano vim curl wget git htop neofetch locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && tail -f /dev/null".to_string();
+    // Build container startup command - install Node.js 18 via NodeSource for Anyone client compatibility
+    let startup_cmd = "DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y ca-certificates curl gnupg && mkdir -p /etc/apt/keyrings && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main' | tee /etc/apt/sources.list.d/nodesource.list && apt-get update && apt-get install -y nodejs nano vim wget git htop neofetch locales && locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8 && tail -f /dev/null".to_string();
 
     // For privacy mode, we'll configure curl via .curlrc AFTER container starts (in PTY handler)
 
